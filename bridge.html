@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>GemOFT 智能桥 - 增强版</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.10.0/ethers.umd.min.js"></script>
+    <style>
+        body { font-family: -apple-system, system-ui, sans-serif; background: #f8fafc; display: flex; justify-content: center; padding: 40px 20px; }
+        .card { background: white; padding: 30px; border-radius: 24px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); width: 100%; max-width: 400px; border: 1px solid #e2e8f0; }
+        .header { text-align: center; margin-bottom: 20px; }
+        .route { display: flex; align-items: center; justify-content: space-between; background: #f1f5f9; padding: 15px; border-radius: 12px; margin-bottom: 20px; }
+        .chain { flex: 1; text-align: center; font-weight: bold; }
+        .input-box { margin-bottom: 20px; }
+        input { width: 100%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 16px; box-sizing: border-box; }
+        .balance { font-size: 12px; color: #64748b; margin-top: 5px; text-align: right; }
+        button { width: 100%; padding: 14px; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        .btn-connect { background: #1e293b; color: white; margin-bottom: 10px; }
+        .btn-bridge { background: #3b82f6; color: white; }
+        .btn-bridge:disabled { background: #e2e8f0; color: #94a3b8; cursor: not-allowed; }
+        #log { margin-top: 15px; padding: 12px; border-radius: 8px; font-size: 13px; display: none; white-space: pre-wrap; word-break: break-all; }
+        .error { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+        .success { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <div class="header">
+        <h2>GemOFT Bridge</h2>
+        <div id="walletIndicator" style="font-size: 10px; color: red;">❌ 未检测到钱包环境</div>
+    </div>
+
+    <div class="route">
+        <div class="chain" id="srcT">AVAX</div>
+        <div id="swapBtn" style="cursor:pointer; font-size:20px;">⇄</div>
+        <div class="chain" id="dstT">POLY</div>
+    </div>
+
+    <button id="connectBtn" class="btn-connect">连接钱包</button>
+    
+    <div class="input-box">
+        <input type="number" id="amount" placeholder="0.0">
+        <div class="balance">余额: <span id="balanceVal">0.00</span></div>
+    </div>
+
+    <button id="bridgeBtn" class="btn-bridge" disabled>发起跨链</button>
+    
+    <div id="log"></div>
+</div>
+
+<script>
+    const CONFIG = {
+        AVAX: { lzId: 106, hex: "0xa86a", addr: "0xfa113908f851e6357d8a20e2a18c22113d5755a9", scan: "https://snowtrace.io/tx/" },
+        POLY: { lzId: 109, hex: "0x89", addr: "0x02649c1ff4296038de4b9ba8f491b42b940a8252", scan: "https://polygonscan.com/tx/" }
+    };
+    const ADAPTER = "0x00010000000000000000000000000000000000000000000000000000000000030d40";
+    const ABI = [
+        "function sendFrom(address _from, uint16 _dstChainId, bytes32 _toAddress, uint _amount, (address,address,bytes) _callParams) public payable",
+        "function estimateSendFee(uint16 _dstChainId, bytes32 _toAddress, uint _amount, bool _useZro, bytes _adapterParams) public view returns (uint nativeFee, uint zroFee)",
+        "function balanceOf(address owner) view returns (uint256)"
+    ];
+
+    let isAvaxToPoly = true;
+    let provider, signer, userAddr;
+
+    // 自动检测钱包注入
+    function checkInjection() {
+        if (window.ethereum) {
+            document.getElementById('walletIndicator').innerText = "✅ 已检测到钱包环境";
+            document.getElementById('walletIndicator').style.color = "green";
+        }
+    }
+    setInterval(checkInjection, 1000);
+
+    async function init() {
+        if (!window.ethereum) return alert("检测不到钱包。请按方案A开启权限或方案B启动服务器。");
+        provider = new ethers.BrowserProvider(window.ethereum);
+        const accs = await provider.send("eth_requestAccounts", []);
+        userAddr = accs[0];
+        signer = await provider.getSigner();
+        document.getElementById('connectBtn').innerText = userAddr.slice(0,10) + "...";
+        updateBalance();
+        checkNet();
+    }
+
+    async function updateBalance() {
+        if (!userAddr) return;
+        try {
+            const src = isAvaxToPoly ? CONFIG.AVAX : CONFIG.POLY;
+            const contract = new ethers.Contract(src.addr, ABI, provider);
+            const bal = await contract.balanceOf(userAddr);
+            document.getElementById('balanceVal').innerText = ethers.formatEther(bal);
+        } catch (e) { console.error(e); }
+    }
+
+    async function checkNet() {
+        const net = await provider.getNetwork();
+        const target = isAvaxToPoly ? CONFIG.AVAX : CONFIG.POLY;
+        if (net.chainId !== BigInt(target.hex)) {
+            document.getElementById('bridgeBtn').innerText = "切换至正确网络";
+            document.getElementById('bridgeBtn').disabled = false;
+        } else {
+            document.getElementById('bridgeBtn').innerText = "发起跨链";
+            document.getElementById('bridgeBtn').disabled = false;
+        }
+    }
+
+    document.getElementById('swapBtn').onclick = () => {
+        isAvaxToPoly = !isAvaxToPoly;
+        document.getElementById('srcT').innerText = isAvaxToPoly ? "AVAX" : "POLY";
+        document.getElementById('dstT').innerText = isAvaxToPoly ? "POLY" : "AVAX";
+        if(provider) { checkNet(); updateBalance(); }
+    };
+
+    document.getElementById('connectBtn').onclick = init;
+
+    document.getElementById('bridgeBtn').onclick = async () => {
+        try {
+            const target = isAvaxToPoly ? CONFIG.AVAX : CONFIG.POLY;
+            const net = await provider.getNetwork();
+            if (net.chainId !== BigInt(target.hex)) {
+                return await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: target.hex }] });
+            }
+
+            const val = document.getElementById('amount').value;
+            const amountWei = ethers.parseUnits(val, 18);
+            const src = isAvaxToPoly ? CONFIG.AVAX : CONFIG.POLY;
+            const dst = isAvaxToPoly ? CONFIG.POLY : CONFIG.AVAX;
+            
+            const contract = new ethers.Contract(src.addr, ABI, signer);
+            const [fee] = await contract.estimateSendFee(dst.lzId, ethers.zeroPadValue(userAddr, 32), amountWei, false, ADAPTER);
+
+            const tx = await contract.sendFrom(userAddr, dst.lzId, ethers.zeroPadValue(userAddr, 32), amountWei, [userAddr, ethers.ZeroAddress, ADAPTER], { value: fee });
+            showLog("交易发出: " + tx.hash, "success");
+        } catch (e) {
+            showLog("错误: " + (e.reason || e.message), "error");
+        }
+    };
+
+    function showLog(m, c) {
+        const l = document.getElementById('log');
+        l.style.display = "block";
+        l.className = c;
+        l.innerText = m;
+    }
+</script>
+</body>
+</html>
